@@ -1,0 +1,17 @@
+# --- deterministic core (required) ---
+tree-sitter>=0.23,<0.27
+tree-sitter-java>=0.23
+networkx>=3.2
+pydantic>=2.6
+
+# --- LangGraph orchestration (required for src/agents.py, src/run.py --hitl) ---
+langgraph>=0.2.60
+langchain-core>=0.3
+
+# --- production LLM namer (optional; only for --llm) ---
+# pip install these when you switch RuleNamer -> LLMNamer
+langchain-anthropic>=0.3        # needs ANTHROPIC_API_KEY
+
+# --- optional escalation / retrieval (not imported by default) ---
+# faiss-cpu>=1.8                 # vector retrieval over AST-chunked code
+# neo4j>=5.20                    # production graph store (swap NetworkX)

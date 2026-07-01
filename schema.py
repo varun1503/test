@@ -1,59 +1,89 @@
-# schema.py
-# Copyright (C) 2005-2024 the SQLAlchemy authors and contributors
-# <see AUTHORS file>
-#
-# This module is part of SQLAlchemy and is released under
-# the MIT License: https://www.opensource.org/licenses/mit-license.php
-
-"""Compatibility namespace for sqlalchemy.sql.schema and related.
-
 """
+schema.py — Output contracts.
 
-from .sql.base import SchemaVisitor  # noqa
-from .sql.ddl import _CreateDropBase  # noqa
-from .sql.ddl import _DDLCompiles  # noqa
-from .sql.ddl import _DropView  # noqa
-from .sql.ddl import AddConstraint  # noqa
-from .sql.ddl import CreateColumn  # noqa
-from .sql.ddl import CreateIndex  # noqa
-from .sql.ddl import CreateSchema  # noqa
-from .sql.ddl import CreateSequence  # noqa
-from .sql.ddl import CreateTable  # noqa
-from .sql.ddl import DDL  # noqa
-from .sql.ddl import DDLBase  # noqa
-from .sql.ddl import DDLElement  # noqa
-from .sql.ddl import DropColumnComment  # noqa
-from .sql.ddl import DropConstraint  # noqa
-from .sql.ddl import DropIndex  # noqa
-from .sql.ddl import DropSchema  # noqa
-from .sql.ddl import DropSequence  # noqa
-from .sql.ddl import DropTable  # noqa
-from .sql.ddl import DropTableComment  # noqa
-from .sql.ddl import SetColumnComment  # noqa
-from .sql.ddl import SetTableComment  # noqa
-from .sql.ddl import sort_tables  # noqa
-from .sql.ddl import sort_tables_and_constraints  # noqa
-from .sql.naming import conv  # noqa
-from .sql.schema import _get_table_key  # noqa
-from .sql.schema import BLANK_SCHEMA  # noqa
-from .sql.schema import CheckConstraint  # noqa
-from .sql.schema import Column  # noqa
-from .sql.schema import ColumnCollectionConstraint  # noqa
-from .sql.schema import ColumnCollectionMixin  # noqa
-from .sql.schema import ColumnDefault  # noqa
-from .sql.schema import Computed  # noqa
-from .sql.schema import Constraint  # noqa
-from .sql.schema import DefaultClause  # noqa
-from .sql.schema import DefaultGenerator  # noqa
-from .sql.schema import FetchedValue  # noqa
-from .sql.schema import ForeignKey  # noqa
-from .sql.schema import ForeignKeyConstraint  # noqa
-from .sql.schema import Identity  # noqa
-from .sql.schema import Index  # noqa
-from .sql.schema import MetaData  # noqa
-from .sql.schema import PrimaryKeyConstraint  # noqa
-from .sql.schema import SchemaItem  # noqa
-from .sql.schema import Sequence  # noqa
-from .sql.schema import Table  # noqa
-from .sql.schema import ThreadLocalMetaData  # noqa
-from .sql.schema import UniqueConstraint  # noqa
+The triplet schema mirrors the OpenLineage ColumnLineageDatasetFacet vocabulary
+(DIRECT/INDIRECT type + subtype + masking) so lineage is interoperable with
+DataHub/Marquez/Atlan. Every hop is grounded in >=1 CodeRefModel; validate.py
+rejects any triplet whose grounding does not check out against parsed source.
+"""
+from __future__ import annotations
+
+from enum import Enum
+from typing import Optional, Literal
+from pydantic import BaseModel, Field
+
+
+class TransformType(str, Enum):
+    DIRECT = "DIRECT"
+    INDIRECT = "INDIRECT"
+
+
+class TransformSubtype(str, Enum):
+    # DIRECT
+    IDENTITY = "IDENTITY"
+    TRANSFORMATION = "TRANSFORMATION"
+    AGGREGATION = "AGGREGATION"
+    # INDIRECT
+    JOIN = "JOIN"
+    GROUP_BY = "GROUP_BY"
+    FILTER = "FILTER"
+    SORT = "SORT"
+    WINDOW = "WINDOW"
+    CONDITIONAL = "CONDITIONAL"
+
+
+class CodeRefModel(BaseModel):
+    file: str
+    start_line: int
+    end_line: int
+    symbol: str
+    snippet: Optional[str] = None
+
+
+class Endpoint(BaseModel):
+    """A data element: dataset namespace + field name, e.g.
+    dataset='one-data-global-merchant-setup-kyc.$requestBody', field='applicationIdentifier'."""
+    dataset: str
+    field: str
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.dataset}.{self.field}"
+
+
+class Transformation(BaseModel):
+    description: str = Field(..., description="Human-readable summary of what happens at this hop")
+    type: TransformType
+    subtype: TransformSubtype
+    masking: bool = Field(False, description="True if the step masks/strips/redacts the data")
+    code_refs: list[CodeRefModel] = Field(..., min_length=1)
+
+
+class Triplet(BaseModel):
+    """One lineage hop: Source | Transformation | Target."""
+    source: Endpoint
+    transformation: Transformation
+    target: Endpoint
+    confidence: Literal["high", "medium", "low"] = "high"
+    provenance: Literal["parser", "llm-inferred"] = "parser"
+    grounded: bool = Field(False, description="Set by validate.py after checking code_refs")
+
+    def line(self) -> str:
+        return f"{self.source.qualified}  ->  [{self.transformation.type}/{self.transformation.subtype}" \
+               f"{'/mask' if self.transformation.masking else ''}] {self.transformation.description}  ->  {self.target.qualified}"
+
+
+class TripletBatch(BaseModel):
+    """What the LLM must return: a list of triplets, nothing else."""
+    triplets: list[Triplet]
+
+
+class Suggestion(BaseModel):
+    category: Literal["data_quality", "missing_lineage", "security", "refactor"]
+    severity: Literal["info", "warning", "critical"]
+    message: str
+    code_refs: list[CodeRefModel] = Field(default_factory=list)
+
+
+class SuggestionBatch(BaseModel):
+    suggestions: list[Suggestion]
